@@ -1,4 +1,5 @@
-# BlueSentra-AI
+# BlueSentra AI
+
 Agentless, behavior-based IoT anomaly detection with explainable triage for homes and small businesses.
 
 BlueSentra AI is an early-stage security platform focused on identifying anomalous behavior across unmanaged IoT devices. The system emphasizes behavior-based detection rather than signatures, with clear explanations for why activity is flagged — enabling faster triage and trust in alerts.
