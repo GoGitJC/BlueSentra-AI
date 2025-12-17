@@ -37,11 +37,6 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 
-.venv/
-__pycache__/
-*.pyc
-data/alerts.csv
-
 
 # Unit test / coverage reports
 htmlcov/
