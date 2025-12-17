@@ -1,21 +1,35 @@
+# ---- BlueSentra bootstrap: makes `src.*` imports work in Streamlit ----
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]  # .../bluesentra-mvp
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+
+# -----------------------------
+# Paths (single source of truth)
+# -----------------------------
+DATA_DIR = REPO_ROOT / "src" / "data"
+DATA_DIR = REPO_ROOT / "data"
+
 import os
 import sys
 import json
 import hashlib
 import subprocess
-
-import pandas as pd
 import streamlit as st
 
 # -----------------------------
 # Path setup (robust)
 # -----------------------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-sys.path.append(os.path.dirname(__file__))
 
-from explain import explain_with_openai
-from demo_mode import inject_compromised_camera
+DATA_DIR = REPO_ROOT / "src" / "data"
+
+from src.dashboard.explain import explain_with_openai
+from src.dashboard.demo_mode import inject_compromised_camera
+
+
 
 # -----------------------------
 # Helpers
@@ -38,14 +52,21 @@ st.caption("AI-powered anomaly detection & incident triage")
 # -----------------------------
 # Load data
 # -----------------------------
-logs_path = os.path.join(DATA_DIR, "iot_network_logs.csv")
-alerts_path = os.path.join(DATA_DIR, "alerts.csv")
+
+import pandas as pd
+import streamlit as st
+
+logs_path = DATA_DIR / "iot_network_logs.csv"
+alerts_path = DATA_DIR / "alerts.csv"
+
+logs = pd.read_csv(logs_path)
+
 
 logs = pd.read_csv(logs_path)
 logs["timestamp"] = pd.to_datetime(logs["timestamp"])
 
 alerts = None
-if os.path.exists(alerts_path):
+if alerts_path.exists():
     alerts = pd.read_csv(alerts_path)
     alerts["timestamp"] = pd.to_datetime(alerts["timestamp"])
 
@@ -69,9 +90,10 @@ with c1:
         st.success(f"Injected incident into {affected} log rows")
 
         subprocess.run(
-            ["python3", os.path.join(BASE_DIR, "src", "detect_anomalies.py")],
-            check=False
-        )
+    ["python3", str(REPO_ROOT / "src" / "detect_anomalies.py")],
+    check=False
+            )
+
         st.rerun()
 
 with c2:
