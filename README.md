@@ -82,3 +82,75 @@ Designed to run on low-cost edge hardware (e.g., Raspberry Pi).
 
 ## 🏗️ MVP Architecture
 
+[ Clinic Network Traffic ]
+↓
+[ Edge Sensor (Raspberry Pi) ]
+↓
+[ Feature Extraction & Baselines ]
+↓
+[ Anomaly Detection Engine ]
+↓
+[ Streamlit Dashboard & Alerts ]
+
+
+> This MVP validates that **agentless, behavior-based detection** is feasible in real-world healthcare networks.
+
+---
+
+## 🧪 MVP Status
+
+### ✅ Implemented
+- Device behavior simulation  
+- Baseline generation  
+- Anomaly detection logic  
+- Explainable alert output  
+- Interactive dashboard (Streamlit)
+
+### 🚧 Not Yet Implemented
+- Live packet capture on production networks  
+- Cloud backend  
+- Production hardening  
+
+> This repository represents a **proof-of-concept**, not a production security appliance.
+
+---
+
+## 🚀 Roadmap
+
+### Near Term
+- Controlled pilot deployments  
+- Expanded device profiling  
+- MSP-friendly reporting  
+
+### Mid Term
+- Multi-site visibility  
+- Centralized management  
+- Improved anomaly scoring  
+
+### Long Term
+- Healthcare-specific risk models  
+- Compliance-oriented reporting  
+- Commercial SaaS platform  
+
+---
+
+## 🤝 Intended Audience
+
+- Managed Service Providers (MSPs) serving healthcare clients  
+- Small healthcare IT teams  
+- Security engineers evaluating IoT risk  
+- Early-stage investors and partners  
+
+---
+
+## ⚠️ Disclaimer
+
+BlueSentra AI is an experimental research project and **not intended for production use** in live healthcare environments without proper validation, approvals, and security review.
+
+---
+
+## 📌 Why BlueSentra AI Matters
+
+Unmanaged IoT devices are one of the **least visible and fastest-growing attack surfaces** in healthcare.
+
+BlueSentra AI explores how **agentless, behavior-based detection** can make this risk visible — without requiring enterprise-scale infrastructure.
