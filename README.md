@@ -32,7 +32,7 @@ BlueSentra AI passively observes network behavior to:
 
 ## Documentation
 
-- 📄 **Research Paper:** `docs/BlueSentra_AI_Research_Paper.pdf`
+- 📄 **Research Paper:** `docs/BlueSentra_AI_Agentless_IoT_Threat_Detection_in_Outpatient_Healthcare.pdf`
 - 🧠 Architecture overview included in `/docs`
 
 ---
