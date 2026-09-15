@@ -18,6 +18,8 @@ class Settings(BaseSettings):
         "postgresql+psycopg://bluesentra:bluesentra@localhost:5432/bluesentra"
     )
 
+    bluesentra_viewer_msp_id: str | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:
