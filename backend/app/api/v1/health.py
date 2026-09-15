@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
 from backend.app import __version__
 from backend.app.core.config import get_settings
@@ -20,9 +21,12 @@ def health() -> HealthResponse:
 
 
 @router.get("/ready", response_model=ReadinessResponse)
-def ready() -> ReadinessResponse:
+def ready():
     db_ok = check_database_connection()
-    return ReadinessResponse(
+    body = ReadinessResponse(
         status="ready" if db_ok else "degraded",
         database="connected" if db_ok else "unavailable",
     )
+    if not db_ok:
+        return JSONResponse(status_code=503, content=body.model_dump())
+    return body

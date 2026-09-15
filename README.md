@@ -21,7 +21,10 @@ BlueSentra passively analyzes network telemetry to identify suspicious behaviora
 | Isolation Forest anomaly scoring on aggregate features | **Implemented** (experimental, not per-device baselines) |
 | Optional OpenAI alert explanations | **Implemented** (optional; rule-based fallback) |
 | FastAPI `/api/v1/health` + `/api/v1/ready` | **Implemented** |
-| PostgreSQL + SQLAlchemy + Alembic scaffold | **Implemented** (no tenant/event schema yet) |
+| PostgreSQL + SQLAlchemy + Alembic multi-tenant domain | **Implemented** (MSP → User → Customer → Site → Sensor/Device) |
+| Database relationship / tenant ownership constraints | **Implemented** (composite FKs + `msp_id` scoping helpers) |
+| Authenticated MSP access isolation (login, tokens, authorization) | **Planned** |
+| REST CRUD for tenants / events / alerts | **Planned** |
 | Zeek / Suricata ingestion, BS-001–BS-005 detections | **Planned** |
 
 ---
@@ -58,7 +61,7 @@ uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 - Health: http://localhost:8000/api/v1/health  
-- Readiness (checks DB): http://localhost:8000/api/v1/ready  
+- Readiness (checks DB): http://localhost:8000/api/v1/ready — HTTP **200** when PostgreSQL is connected, HTTP **503** when unavailable  
 - OpenAPI: http://localhost:8000/docs  
 
 Full stack via Docker:
@@ -71,6 +74,7 @@ Alembic (from repo root, after DB is up):
 
 ```bash
 cd backend && alembic -c alembic.ini upgrade head
+python scripts/seed_demo_tenant.py
 ```
 
 ---
@@ -95,8 +99,15 @@ streamlit run src/dashboard/app.py
 ## Tests
 
 ```bash
+docker compose up -d db
+cd backend && alembic -c alembic.ini upgrade head
+cd ..
+python scripts/verify_phase4_schema.py
+python scripts/seed_demo_tenant.py   # safe to run repeatedly (idempotent)
 pytest
 ```
+
+PostgreSQL integration tests are **skipped** when the database is not reachable. A skipped result is not a passing integration run.
 
 ---
 

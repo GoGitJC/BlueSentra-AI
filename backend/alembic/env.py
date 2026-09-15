@@ -12,8 +12,7 @@ if str(REPO_ROOT) not in sys.path:
 from backend.app.core.config import get_settings
 from backend.app.database.base import Base
 
-# Import models here when added (Phase 4+) so Alembic sees metadata.
-# from backend.app import models  # noqa: F401
+from backend.app import models as _models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
