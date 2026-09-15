@@ -10,6 +10,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from backend.app.models.customer import Customer
+from backend.app.models.device import Device
 from backend.app.models.network_event import NetworkEvent
 from backend.app.models.sensor import Sensor
 from backend.app.models.site import Site
@@ -62,9 +63,29 @@ class EventTimeBounds:
 
 
 @dataclass(frozen=True)
+class TenantScope:
+    """Customer/site/sensor scope without table time bounds."""
+
+    customer_id: uuid.UUID | None = None
+    site_id: uuid.UUID | None = None
+    sensor_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class DataFreshness:
+    """Stored-record timestamps for the configured MSP and tenant scope."""
+
+    latest_event_at: datetime | None
+    latest_ingested_at: datetime | None
+    stored_event_count: int
+
+
+@dataclass(frozen=True)
 class EventDetail:
     id: uuid.UUID
     event_at: datetime
+    ingested_at: datetime
+    customer_name: str
     site_name: str
     sensor_name: str
     source_type: str
@@ -80,6 +101,7 @@ class EventDetail:
     orig_pkts: int | None
     resp_pkts: int | None
     duration: float | None
+    linked_device_label: str | None
     source_record: dict
 
 
@@ -103,6 +125,45 @@ def require_viewer_msp_id(raw: str | None) -> uuid.UUID:
         raise ViewerConfigError(
             "BLUESENTRA_VIEWER_MSP_ID must be a valid UUID."
         ) from exc
+
+
+def tenant_scope_to_filters(scope: TenantScope) -> EventViewFilters:
+    return EventViewFilters(
+        customer_id=scope.customer_id,
+        site_id=scope.site_id,
+        sensor_id=scope.sensor_id,
+        start_utc=None,
+        end_utc=None,
+    )
+
+
+def format_relative_utc_age(
+    moment: datetime | None,
+    *,
+    now: datetime | None = None,
+) -> str:
+    """Human-readable age in UTC; never negative (future → neutral wording)."""
+    if moment is None:
+        return ""
+    reference = now or datetime.now(tz=UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    else:
+        moment = moment.astimezone(UTC)
+    delta = reference - moment
+    if delta.total_seconds() < 0:
+        return "timestamp is in the future relative to UTC now"
+    seconds = int(delta.total_seconds())
+    if seconds < 60:
+        return f"{seconds} second(s) ago"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} minute(s) ago"
+    hours = minutes // 60
+    if hours < 48:
+        return f"{hours} hour(s) ago"
+    days = hours // 24
+    return f"{days} day(s) ago"
 
 
 def validate_filter_ownership(
@@ -280,6 +341,30 @@ def query_events_page(
     return EventQueryResult(rows=event_rows, total_matching=total)
 
 
+def get_data_freshness(
+    db: Session,
+    *,
+    msp_id: uuid.UUID,
+    scope: TenantScope,
+) -> DataFreshness:
+    """Max observed and ingestion timestamps for scope, ignoring table time filters."""
+    filters = tenant_scope_to_filters(scope)
+    validate_filter_ownership(db, msp_id=msp_id, filters=filters)
+    base = _base_event_query(msp_id, filters).subquery()
+    row = db.execute(
+        select(
+            func.max(base.c.event_at),
+            func.max(base.c.ingested_at),
+            func.count(),
+        ).select_from(base)
+    ).one()
+    return DataFreshness(
+        latest_event_at=row[0],
+        latest_ingested_at=row[1],
+        stored_event_count=int(row[2] or 0),
+    )
+
+
 def summarize_events(
     db: Session,
     *,
@@ -334,21 +419,52 @@ def get_event_detail(
     """Load one event for the viewer; None if missing, wrong MSP, or outside filters."""
     validate_filter_ownership(db, msp_id=msp_id, filters=filters)
     row = db.execute(
-        select(NetworkEvent, Sensor.name, Site.name, Site.customer_id)
+        select(
+            NetworkEvent,
+            Sensor.name,
+            Site.name,
+            Customer.name,
+            Site.customer_id,
+            Device.hostname,
+            Device.mac_address,
+        )
         .join(Sensor, NetworkEvent.sensor_id == Sensor.id)
         .join(Site, NetworkEvent.site_id == Site.id)
+        .join(Customer, Site.customer_id == Customer.id)
+        .outerjoin(
+            Device,
+            (NetworkEvent.device_id == Device.id)
+            & (Device.msp_id == msp_id)
+            & (Device.site_id == NetworkEvent.site_id),
+        )
         .where(NetworkEvent.id == event_id, NetworkEvent.msp_id == msp_id)
     ).one_or_none()
     if row is None:
         return None
-    event, sensor_name, site_name, site_customer_id = row
+    (
+        event,
+        sensor_name,
+        site_name,
+        customer_name,
+        site_customer_id,
+        device_hostname,
+        device_mac,
+    ) = row
     if not _event_matches_filters(
         event, filters=filters, site_customer_id=site_customer_id
     ):
         return None
+
+    linked_device_label: str | None = None
+    if event.device_id is not None and (device_hostname or device_mac):
+        parts = [p for p in (device_hostname, device_mac) if p]
+        linked_device_label = " · ".join(parts)
+
     return EventDetail(
         id=event.id,
         event_at=event.event_at,
+        ingested_at=event.ingested_at,
+        customer_name=customer_name,
         site_name=site_name,
         sensor_name=sensor_name,
         source_type=event.source_type.value,
@@ -364,5 +480,6 @@ def get_event_detail(
         orig_pkts=event.orig_pkts,
         resp_pkts=event.resp_pkts,
         duration=event.duration,
+        linked_device_label=linked_device_label,
         source_record=dict(event.source_record),
     )

@@ -19,10 +19,14 @@ from sqlalchemy.exc import SQLAlchemyError
 from backend.app.core.config import get_settings
 from backend.app.database.session import get_session_factory
 from backend.app.services.network_events_view import (
+    DataFreshness,
     EventDetail,
     EventViewFilters,
+    TenantScope,
     ViewerConfigError,
     default_time_window,
+    format_relative_utc_age,
+    get_data_freshness,
     get_event_detail,
     get_event_time_bounds,
     list_customers,
@@ -40,7 +44,9 @@ from src.dashboard.theme import (
     ICON_LINK,
     ICON_UP,
     format_bytes,
+    format_utc_display,
     render_context_bar,
+    render_data_freshness_panel,
     render_metric_card,
     render_page_intro,
 )
@@ -88,6 +94,7 @@ def _render_connection_detail(detail: EventDetail) -> None:
     with c3:
         _detail_field("Protocol", detail.transport_protocol.upper())
         _detail_field("Service", detail.service if detail.service else "—")
+    _detail_field("Source event ID", detail.source_event_id, mono=True)
 
     st.markdown('<p class="bs-section-label">Traffic</p>', unsafe_allow_html=True)
     t1, t2, t3 = st.columns(3)
@@ -100,8 +107,9 @@ def _render_connection_detail(detail: EventDetail) -> None:
     with t3:
         _detail_field("Duration (seconds)", _fmt_duration(detail.duration))
     st.caption(
-        "Originator is the connection initiator; responder is the other endpoint "
-        "(Zeek conn.log direction). This is telemetry only—not a verdict on intent or device type."
+        "Originator and responder describe connection roles in Zeek conn.log. They do not "
+        "necessarily map to internal/external or outbound/inbound. A single connection record "
+        "does not establish malicious activity."
     )
 
     st.markdown('<p class="bs-section-label">Context</p>', unsafe_allow_html=True)
@@ -111,18 +119,21 @@ def _render_connection_detail(detail: EventDetail) -> None:
             "Event time (UTC)",
             detail.event_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
         )
+        _detail_field(
+            "Ingestion time (UTC)",
+            detail.ingested_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+        )
     with x2:
-        _detail_field("Sensor", detail.sensor_name)
-    with x3:
+        _detail_field("Customer", detail.customer_name)
         _detail_field("Site", detail.site_name)
+    with x3:
+        _detail_field("Sensor", detail.sensor_name)
+        _detail_field("Source type", detail.source_type)
+    if detail.linked_device_label:
+        _detail_field("Linked device", detail.linked_device_label)
 
-    with st.expander("Advanced identifiers and raw record"):
-        a1, a2 = st.columns(2)
-        with a1:
-            _detail_field("Source type", detail.source_type)
-            _detail_field("Source event ID", detail.source_event_id, mono=True)
-        with a2:
-            _detail_field("Internal event ID", str(detail.id), mono=True)
+    with st.expander("Original source evidence", expanded=False):
+        st.caption("Read-only Zeek JSON as stored during import.")
         st.json(detail.source_record)
 
 
@@ -167,56 +178,57 @@ def _load_event_detail(
         db.close()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def cached_view_data(
-    msp_id_str: str,
-    customer_id_str: str | None,
-    site_id_str: str | None,
-    sensor_id_str: str | None,
-    start_iso: str,
-    end_iso: str,
-    page: int,
-    page_size: int,
-) -> dict[str, Any]:
-    msp_id = uuid.UUID(msp_id_str)
-    filters = EventViewFilters(
-        customer_id=uuid.UUID(customer_id_str) if customer_id_str else None,
-        site_id=uuid.UUID(site_id_str) if site_id_str else None,
-        sensor_id=uuid.UUID(sensor_id_str) if sensor_id_str else None,
-        start_utc=datetime.fromisoformat(start_iso),
-        end_utc=datetime.fromisoformat(end_iso),
-    )
-    return _load_view_data(
-        msp_id=msp_id,
-        filters=filters,
-        page=page,
-        page_size=page_size,
+def _load_freshness(*, msp_id: uuid.UUID, scope: TenantScope) -> DataFreshness:
+    db = get_session_factory()()
+    try:
+        return get_data_freshness(db, msp_id=msp_id, scope=scope)
+    finally:
+        db.close()
+
+
+def _scope_label(customer: str, site: str, sensor: str) -> str:
+    return f"{customer} · {site} · {sensor}"
+
+
+def _freshness_displays(freshness: DataFreshness) -> tuple[str, str, str, str]:
+    if freshness.stored_event_count == 0:
+        guidance = "Import Zeek conn.log JSONL for this MSP, then refresh."
+        return (
+            "No imported events",
+            guidance,
+            "No imported events",
+            guidance,
+        )
+    event_age = format_relative_utc_age(freshness.latest_event_at)
+    ingest_age = format_relative_utc_age(freshness.latest_ingested_at)
+    return (
+        format_utc_display(freshness.latest_event_at),
+        f"When the network activity occurred ({event_age}).",
+        format_utc_display(freshness.latest_ingested_at),
+        "When the newest stored row was written ({0}). Importing an old log today "
+        "does not make its activity current.".format(ingest_age),
     )
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def cached_event_detail(
-    msp_id_str: str,
-    event_id_str: str,
-    customer_id_str: str | None,
-    site_id_str: str | None,
-    sensor_id_str: str | None,
-    start_iso: str,
-    end_iso: str,
-) -> EventDetail | None:
-    msp_id = uuid.UUID(msp_id_str)
-    filters = EventViewFilters(
-        customer_id=uuid.UUID(customer_id_str) if customer_id_str else None,
-        site_id=uuid.UUID(site_id_str) if site_id_str else None,
-        sensor_id=uuid.UUID(sensor_id_str) if sensor_id_str else None,
-        start_utc=datetime.fromisoformat(start_iso),
-        end_utc=datetime.fromisoformat(end_iso),
-    )
-    return _load_event_detail(
-        msp_id=msp_id,
-        event_id=uuid.UUID(event_id_str),
-        filters=filters,
-    )
+def _table_filter_excludes_latest(
+    *,
+    freshness: DataFreshness,
+    start_utc: datetime,
+    end_utc: datetime,
+) -> str | None:
+    latest = freshness.latest_event_at
+    if latest is None or freshness.stored_event_count == 0:
+        return None
+    if latest.tzinfo is None:
+        latest = latest.replace(tzinfo=UTC)
+    else:
+        latest = latest.astimezone(UTC)
+    if latest < start_utc or latest > end_utc:
+        return (
+            "The table time filter excludes the latest observed activity in this scope. "
+            "Freshness above reflects all stored events for the selected customer/site/sensor."
+        )
+    return None
 
 
 def _apply_default_time_window(default_start: datetime, default_end: datetime) -> None:
@@ -231,8 +243,7 @@ def _reset_filters(default_start: datetime, default_end: datetime) -> None:
     st.session_state["ne_page"] = 1
     st.session_state["ne_selected_event_id"] = None
     _apply_default_time_window(default_start, default_end)
-    cached_view_data.clear()
-    cached_event_detail.clear()
+    st.session_state.pop("ne_last_good", None)
 
 
 def _db_unavailable(message: str) -> None:
@@ -418,34 +429,83 @@ def render() -> None:
         last_refresh=st.session_state["ne_last_refresh"],
     )
     if refresh_clicked:
-        cached_view_data.clear()
-        cached_event_detail.clear()
         st.rerun()
 
+    tenant_scope = TenantScope(
+        customer_id=customer_uuid,
+        site_id=site_uuid,
+        sensor_id=uuid.UUID(selected_sensor) if selected_sensor else None,
+    )
+    table_filters = EventViewFilters(
+        customer_id=tenant_scope.customer_id,
+        site_id=tenant_scope.site_id,
+        sensor_id=tenant_scope.sensor_id,
+        start_utc=start_utc,
+        end_utc=end_utc,
+    )
+    data_fingerprint = (
+        selected_customer,
+        selected_site,
+        selected_sensor,
+        start_utc.isoformat(),
+        end_utc.isoformat(),
+        page,
+        page_size,
+    )
+
     payload: dict[str, Any] | None = None
+    freshness: DataFreshness | None = None
+    showing_stale = False
     try:
         with st.spinner("Loading connection events…"):
-            payload = cached_view_data(
-                str(msp_id),
-                selected_customer,
-                selected_site,
-                selected_sensor,
-                start_utc.isoformat(),
-                end_utc.isoformat(),
-                page,
-                page_size,
+            payload = _load_view_data(
+                msp_id=msp_id,
+                filters=table_filters,
+                page=page,
+                page_size=page_size,
             )
+            freshness = _load_freshness(msp_id=msp_id, scope=tenant_scope)
+        st.session_state["ne_last_good"] = {
+            "fingerprint": data_fingerprint,
+            "payload": payload,
+            "freshness": freshness,
+        }
+        st.session_state["ne_last_refresh"] = datetime.now(tz=UTC)
     except ViewerConfigError as exc:
         st.warning(str(exc))
         return
     except SQLAlchemyError:
-        _db_unavailable("Unable to query PostgreSQL for connection events.")
+        prior = st.session_state.get("ne_last_good")
+        if prior and prior.get("fingerprint") == data_fingerprint:
+            payload = prior["payload"]
+            freshness = prior["freshness"]
+            showing_stale = True
+        else:
+            _db_unavailable("Unable to query PostgreSQL for connection events.")
+            return
+
+    if payload is None or freshness is None:
         return
 
-    if payload is None:
-        return
+    if showing_stale:
+        st.warning(
+            "Showing previously loaded data from the last successful refresh. "
+            "The latest reload failed."
+        )
 
-    st.session_state["ne_last_refresh"] = datetime.now(tz=UTC)
+    ev_disp, ev_age, ing_disp, ing_age = _freshness_displays(freshness)
+    render_data_freshness_panel(
+        scope_label=_scope_label(customer_label, site_label, sensor_label),
+        latest_event_display=ev_disp,
+        latest_event_age=ev_age,
+        latest_ingestion_display=ing_disp,
+        latest_ingestion_age=ing_age,
+        table_filter_note=_table_filter_excludes_latest(
+            freshness=freshness,
+            start_utc=start_utc,
+            end_utc=end_utc,
+        ),
+    )
     summary = payload["summary"]
     total = payload["total"]
 
@@ -590,44 +650,37 @@ def render() -> None:
             st.session_state["ne_selected_event_id"] = None
             st.rerun()
 
-    row_choices = { _row_label(r): str(r.id) for r in rows }
-    labels = list(row_choices.keys())
-    if st.session_state["ne_selected_event_id"] not in row_choices.values():
+    event_ids = [str(r.id) for r in rows]
+    id_labels = {str(r.id): _row_label(r) for r in rows}
+    if st.session_state["ne_selected_event_id"] not in event_ids:
         st.session_state["ne_selected_event_id"] = None
 
     default_index = 0
-    if st.session_state["ne_selected_event_id"]:
-        for idx, eid in enumerate(row_choices.values()):
-            if eid == st.session_state["ne_selected_event_id"]:
-                default_index = idx
-                break
+    if st.session_state["ne_selected_event_id"] in event_ids:
+        default_index = event_ids.index(st.session_state["ne_selected_event_id"])
 
     st.markdown('<p class="bs-section-title">Connection details</p>', unsafe_allow_html=True)
-    picked_label = st.selectbox(
+    picked_id = st.selectbox(
         "Select a connection from this page",
-        labels,
+        event_ids,
         index=default_index,
-        help="Inspect stored fields for one connection. Selection clears when filters or page change.",
+        format_func=lambda eid: id_labels[eid],
+        help="Selection uses the immutable event UUID. Clears when filters or page change.",
     )
-    picked_id = row_choices[picked_label]
     st.session_state["ne_selected_event_id"] = picked_id
 
     try:
-        detail = cached_event_detail(
-            str(msp_id),
-            picked_id,
-            selected_customer,
-            selected_site,
-            selected_sensor,
-            start_utc.isoformat(),
-            end_utc.isoformat(),
+        detail = _load_event_detail(
+            msp_id=msp_id,
+            event_id=uuid.UUID(picked_id),
+            filters=table_filters,
         )
     except SQLAlchemyError:
         _db_unavailable("Unable to load connection details from PostgreSQL.")
         return
 
     if detail is None:
-        st.warning("This connection is no longer available for the current filters.")
+        st.warning("This connection is unavailable for the current filters or may have been removed.")
         st.session_state["ne_selected_event_id"] = None
         return
 

@@ -26,6 +26,7 @@ BlueSentra passively analyzes network telemetry to identify suspicious behaviora
 | Authenticated MSP access isolation (login, tokens, authorization) | **Planned** |
 | REST CRUD for tenants / events / alerts | **Planned** |
 | Zeek `conn.log` JSONL import (CLI → PostgreSQL) | **Implemented** (Phase 5A; offline import) |
+| Local Network Events viewer (Streamlit → PostgreSQL) | **Implemented** (localhost-only; server-configured MSP) |
 | HTTP event ingestion, Suricata, BS-001–BS-005 detections | **Planned** |
 
 ---
@@ -97,20 +98,25 @@ python scripts/import_zeek_conn.py \
 
 ---
 
-## Run the Streamlit prototype
+## Run the Streamlit dashboard (local only)
+
+Bind to **127.0.0.1** only. The Network Events view requires PostgreSQL and `BLUESENTRA_VIEWER_MSP_ID` (see `.env.example`). Details, freshness semantics, and security boundaries: [`docs/network-events-viewer.md`](docs/network-events-viewer.md).
 
 ```bash
 source .venv/bin/activate
 pip install -r requirements.txt
+docker compose up -d db
+cd backend && alembic -c alembic.ini upgrade head && cd ..
 
-# Regenerate sample logs (optional)
+# Prototype CSV path (optional): regenerate logs and alerts
 python src/dashboard/generate_logs.py
-
-# Run detection → writes src/data/alerts.csv
 python src/core/detect_anomalies.py
 
-streamlit run src/dashboard/app.py
+BLUESENTRA_VIEWER_MSP_ID=<msp-uuid> \
+  streamlit run src/dashboard/app.py --server.address=127.0.0.1 --server.port=8501
 ```
+
+Use sidebar **Prototype Demo** for CSV-backed simulated analysis (separate from PostgreSQL telemetry).
 
 ---
 

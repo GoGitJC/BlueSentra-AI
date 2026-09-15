@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import html
-from datetime import datetime
+from datetime import UTC, datetime
 
 import streamlit as st
 
@@ -250,6 +250,14 @@ def inject_global_styles() -> None:
     margin: 0.5rem 0 0 0;
     line-height: 1.45;
   }}
+  .bs-freshness-panel {{
+    background: var(--bs-surface);
+    border: 1px solid var(--bs-border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem 1rem 1rem;
+    margin: 0 0 1.25rem 0;
+    box-shadow: 0 1px 3px rgba(21, 52, 91, 0.04);
+  }}
   .bs-table-shell {{
     margin-top: 0.35rem;
   }}
@@ -323,6 +331,52 @@ def render_page_intro(*, title: str, subtitle: str, demo_badge: str | None = Non
         )
     st.markdown(f'<h1 class="bs-page-title">{html.escape(title)}</h1>', unsafe_allow_html=True)
     st.markdown(f'<p class="bs-page-sub">{html.escape(subtitle)}</p>', unsafe_allow_html=True)
+
+
+def format_utc_display(moment: datetime | None) -> str:
+    if moment is None:
+        return "No imported events"
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def render_data_freshness_panel(
+    *,
+    scope_label: str,
+    latest_event_display: str,
+    latest_event_age: str,
+    latest_ingestion_display: str,
+    latest_ingestion_age: str,
+    table_filter_note: str | None,
+) -> None:
+    note_html = ""
+    if table_filter_note:
+        note_html = (
+            f'<p class="bs-help">{html.escape(table_filter_note)}</p>'
+        )
+    st.markdown(
+        f"""
+<div class="bs-freshness-panel">
+  <p class="bs-section-label">Data freshness</p>
+  <p class="bs-help">Scope: {html.escape(scope_label)}. Based on stored records only; duplicate-only imports are not reflected.</p>
+  <div class="bs-detail-grid">
+    <div class="bs-detail-item">
+      <p class="bs-detail-k">Latest observed activity</p>
+      <p class="bs-detail-v">{html.escape(latest_event_display)}</p>
+      <p class="bs-help">{html.escape(latest_event_age)}</p>
+    </div>
+    <div class="bs-detail-item">
+      <p class="bs-detail-k">Latest stored-event ingestion</p>
+      <p class="bs-detail-v">{html.escape(latest_ingestion_display)}</p>
+      <p class="bs-help">{html.escape(latest_ingestion_age)}</p>
+    </div>
+  </div>
+  {note_html}
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_context_bar(

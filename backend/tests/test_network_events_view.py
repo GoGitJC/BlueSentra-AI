@@ -8,8 +8,11 @@ from backend.app.models.network_event import NetworkEvent
 from backend.app.services import tenant_hierarchy as th
 from backend.app.services.network_events_view import (
     EventViewFilters,
+    TenantScope,
     ViewerConfigError,
     default_time_window,
+    format_relative_utc_age,
+    get_data_freshness,
     get_event_detail,
     list_sites,
     query_events_page,
@@ -189,6 +192,10 @@ def test_get_event_detail_scoped_to_msp_and_filters(db_session):
     assert detail is not None
     assert detail.src_ip == "192.0.2.10"
     assert detail.site_name == "S"
+    assert detail.customer_name == "C"
+    assert detail.ingested_at is not None
+    assert detail.orig_pkts == 10
+    assert detail.linked_device_label is None
     assert detail.source_record["uid"] == f"UID-{slug}"
 
     assert get_event_detail(
@@ -206,3 +213,279 @@ def test_get_event_detail_scoped_to_msp_and_filters(db_session):
     assert get_event_detail(
         db_session, msp_id=msp_a.id, event_id=event.id, filters=narrow
     ) is None
+
+    assert get_event_detail(
+        db_session,
+        msp_id=msp_a.id,
+        event_id=uuid.uuid4(),
+        filters=filters,
+    ) is None
+
+
+def test_get_event_detail_preserves_null_optional_fields(db_session):
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-null-{slug}")
+    cust = th.create_customer(db_session, msp_id=msp.id, name="C", slug=f"c-{slug}")
+    site = th.create_site(
+        db_session,
+        msp_id=msp.id,
+        customer_id=cust.id,
+        name="S",
+        slug=f"s-{slug}",
+    )
+    sensor = th.create_sensor(
+        db_session,
+        msp_id=msp.id,
+        site_id=site.id,
+        name="Sensor",
+        slug=f"sen-{slug}",
+    )
+    event = NetworkEvent(
+        msp_id=msp.id,
+        site_id=site.id,
+        sensor_id=sensor.id,
+        source_type=NetworkEventSourceType.ZEEK_CONN,
+        source_event_id=f"UID-{slug}",
+        event_at=datetime(2024, 8, 1, tzinfo=UTC),
+        src_ip="192.0.2.3",
+        dst_ip="198.51.100.3",
+        transport_protocol="tcp",
+        orig_bytes=None,
+        resp_bytes=None,
+        orig_pkts=None,
+        resp_pkts=None,
+        duration=None,
+        service=None,
+        source_record={"uid": f"UID-{slug}"},
+    )
+    db_session.add(event)
+    db_session.flush()
+    detail = get_event_detail(
+        db_session,
+        msp_id=msp.id,
+        event_id=event.id,
+        filters=EventViewFilters(sensor_id=sensor.id),
+    )
+    assert detail is not None
+    assert detail.orig_bytes is None
+    assert detail.service is None
+    assert detail.source_record["uid"] == f"UID-{slug}"
+
+
+def test_get_event_detail_excludes_wrong_sensor_scope(db_session):
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-sen-{slug}")
+    cust = th.create_customer(db_session, msp_id=msp.id, name="C", slug=f"c-{slug}")
+    site = th.create_site(
+        db_session,
+        msp_id=msp.id,
+        customer_id=cust.id,
+        name="S",
+        slug=f"s-{slug}",
+    )
+    sensor_a = th.create_sensor(
+        db_session, msp_id=msp.id, site_id=site.id, name="A", slug=f"sa-{slug}"
+    )
+    sensor_b = th.create_sensor(
+        db_session, msp_id=msp.id, site_id=site.id, name="B", slug=f"sb-{slug}"
+    )
+    event = NetworkEvent(
+        msp_id=msp.id,
+        site_id=site.id,
+        sensor_id=sensor_a.id,
+        source_type=NetworkEventSourceType.ZEEK_CONN,
+        source_event_id=f"UID-{slug}",
+        event_at=datetime(2024, 7, 1, tzinfo=UTC),
+        src_ip="192.0.2.1",
+        dst_ip="198.51.100.1",
+        transport_protocol="tcp",
+        source_record={"uid": f"UID-{slug}"},
+    )
+    db_session.add(event)
+    db_session.flush()
+    wrong_sensor_filters = EventViewFilters(sensor_id=sensor_b.id)
+    assert get_event_detail(
+        db_session,
+        msp_id=msp.id,
+        event_id=event.id,
+        filters=wrong_sensor_filters,
+    ) is None
+
+
+def test_format_relative_utc_age_future_never_negative(db_session):
+    future = datetime.now(tz=UTC).replace(year=2099)
+    text = format_relative_utc_age(future)
+    assert "future" in text.lower()
+    assert "ago" not in text
+
+
+def test_get_data_freshness_empty_scope(db_session):
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-fr-{slug}")
+    fresh = get_data_freshness(db_session, msp_id=msp.id, scope=TenantScope())
+    assert fresh.stored_event_count == 0
+    assert fresh.latest_event_at is None
+    assert fresh.latest_ingested_at is None
+
+
+def test_get_data_freshness_ignores_table_time_filter(db_session):
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-ft-{slug}")
+    cust = th.create_customer(db_session, msp_id=msp.id, name="C", slug=f"c-{slug}")
+    site = th.create_site(
+        db_session,
+        msp_id=msp.id,
+        customer_id=cust.id,
+        name="S",
+        slug=f"s-{slug}",
+    )
+    sensor = th.create_sensor(
+        db_session,
+        msp_id=msp.id,
+        site_id=site.id,
+        name="Sensor",
+        slug=f"sen-{slug}",
+    )
+    old_activity = datetime(2019, 6, 1, 8, 0, tzinfo=UTC)
+    recent_ingestion = datetime(2025, 12, 1, 15, 0, tzinfo=UTC)
+    db_session.add(
+        NetworkEvent(
+            msp_id=msp.id,
+            site_id=site.id,
+            sensor_id=sensor.id,
+            source_type=NetworkEventSourceType.ZEEK_CONN,
+            source_event_id=f"UID-old-{slug}",
+            event_at=old_activity,
+            ingested_at=recent_ingestion,
+            src_ip="192.0.2.50",
+            dst_ip="198.51.100.50",
+            transport_protocol="tcp",
+            source_record={"uid": f"UID-old-{slug}"},
+        )
+    )
+    db_session.flush()
+
+    scope = TenantScope(sensor_id=sensor.id)
+    fresh = get_data_freshness(db_session, msp_id=msp.id, scope=scope)
+    assert fresh.latest_event_at == old_activity
+    assert fresh.latest_ingested_at == recent_ingestion
+
+    narrow_table = EventViewFilters(
+        sensor_id=sensor.id,
+        start_utc=datetime(2024, 1, 1, tzinfo=UTC),
+        end_utc=datetime(2024, 12, 31, tzinfo=UTC),
+    )
+    summary = summarize_events(db_session, msp_id=msp.id, filters=narrow_table)
+    assert summary.connection_count == 0
+    fresh_again = get_data_freshness(db_session, msp_id=msp.id, scope=scope)
+    assert fresh_again.latest_event_at == old_activity
+
+
+def test_get_data_freshness_customer_isolation(db_session):
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-iso-{slug}")
+    c1 = th.create_customer(db_session, msp_id=msp.id, name="C1", slug=f"c1-{slug}")
+    c2 = th.create_customer(db_session, msp_id=msp.id, name="C2", slug=f"c2-{slug}")
+    s1 = th.create_site(
+        db_session, msp_id=msp.id, customer_id=c1.id, name="S1", slug=f"s1-{slug}"
+    )
+    s2 = th.create_site(
+        db_session, msp_id=msp.id, customer_id=c2.id, name="S2", slug=f"s2-{slug}"
+    )
+    sen1 = th.create_sensor(
+        db_session, msp_id=msp.id, site_id=s1.id, name="Sen1", slug=f"se1-{slug}"
+    )
+    sen2 = th.create_sensor(
+        db_session, msp_id=msp.id, site_id=s2.id, name="Sen2", slug=f"se2-{slug}"
+    )
+    t1 = datetime(2024, 1, 1, tzinfo=UTC)
+    t2 = datetime(2024, 2, 1, tzinfo=UTC)
+    db_session.add_all(
+        [
+            NetworkEvent(
+                msp_id=msp.id,
+                site_id=s1.id,
+                sensor_id=sen1.id,
+                source_type=NetworkEventSourceType.ZEEK_CONN,
+                source_event_id=f"u1-{slug}",
+                event_at=t1,
+                src_ip="192.0.2.1",
+                dst_ip="198.51.100.1",
+                transport_protocol="tcp",
+                source_record={"uid": "1"},
+            ),
+            NetworkEvent(
+                msp_id=msp.id,
+                site_id=s2.id,
+                sensor_id=sen2.id,
+                source_type=NetworkEventSourceType.ZEEK_CONN,
+                source_event_id=f"u2-{slug}",
+                event_at=t2,
+                src_ip="192.0.2.2",
+                dst_ip="198.51.100.2",
+                transport_protocol="tcp",
+                source_record={"uid": "2"},
+            ),
+        ]
+    )
+    db_session.flush()
+
+    c1_fresh = get_data_freshness(
+        db_session, msp_id=msp.id, scope=TenantScope(customer_id=c1.id)
+    )
+    assert c1_fresh.stored_event_count == 1
+    assert c1_fresh.latest_event_at == t1
+
+    c2_fresh = get_data_freshness(
+        db_session, msp_id=msp.id, scope=TenantScope(customer_id=c2.id)
+    )
+    assert c2_fresh.latest_event_at == t2
+
+
+def test_duplicate_reimport_does_not_change_stored_ingestion_max(db_session):
+    """Freshness uses MAX(ingested_at) on stored rows; duplicate inserts add no row."""
+    slug = uuid.uuid4().hex[:8]
+    msp = th.create_msp(db_session, name="M", slug=f"msp-dup-{slug}")
+    cust = th.create_customer(db_session, msp_id=msp.id, name="C", slug=f"c-{slug}")
+    site = th.create_site(
+        db_session,
+        msp_id=msp.id,
+        customer_id=cust.id,
+        name="S",
+        slug=f"s-{slug}",
+    )
+    sensor = th.create_sensor(
+        db_session,
+        msp_id=msp.id,
+        site_id=site.id,
+        name="Sensor",
+        slug=f"sen-{slug}",
+    )
+    first_ingested = datetime(2024, 5, 1, 10, 0, tzinfo=UTC)
+    db_session.add(
+        NetworkEvent(
+            msp_id=msp.id,
+            site_id=site.id,
+            sensor_id=sensor.id,
+            source_type=NetworkEventSourceType.ZEEK_CONN,
+            source_event_id=f"dup-{slug}",
+            event_at=datetime(2024, 4, 1, tzinfo=UTC),
+            ingested_at=first_ingested,
+            src_ip="192.0.2.9",
+            dst_ip="198.51.100.9",
+            transport_protocol="tcp",
+            source_record={"uid": f"dup-{slug}"},
+        )
+    )
+    db_session.flush()
+    before = get_data_freshness(
+        db_session, msp_id=msp.id, scope=TenantScope(sensor_id=sensor.id)
+    )
+    assert before.latest_ingested_at == first_ingested
+    assert before.stored_event_count == 1
+    # Simulated duplicate-only import: no second row with a newer ingested_at.
+    after = get_data_freshness(
+        db_session, msp_id=msp.id, scope=TenantScope(sensor_id=sensor.id)
+    )
+    assert after.latest_ingested_at == first_ingested
+    assert after.stored_event_count == 1
