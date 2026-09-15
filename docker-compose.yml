@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bluesentra
+      POSTGRES_PASSWORD: bluesentra
+      POSTGRES_DB: bluesentra
+    ports:
+      - "5432:5432"
+    volumes:
+      - bluesentra_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bluesentra -d bluesentra"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    environment:
+      BLUESENTRA_ENV: dev
+      LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+psycopg://bluesentra:bluesentra@db:5432/bluesentra
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  bluesentra_pgdata:
