@@ -1,6 +1,19 @@
+# Prototype (Streamlit dashboard + CSV pipeline)
 pandas
 numpy
 scikit-learn
 streamlit
 joblib
 openai
+
+# Backend API (FastAPI + PostgreSQL)
+fastapi
+uvicorn[standard]
+sqlalchemy>=2.0
+alembic
+psycopg[binary]
+pydantic-settings
+
+# Testing
+pytest
+httpx
