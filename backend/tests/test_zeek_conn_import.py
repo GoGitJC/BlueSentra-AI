@@ -18,33 +18,47 @@ from backend.app.services.zeek_conn_import import (
 FIXTURE_PATH = Path(__file__).resolve().parents[2] / "fixtures" / "zeek" / "conn_sample.jsonl"
 
 
+def _event_count_for_sensor(db_session, sensor_id: uuid.UUID) -> int:
+    return (
+        db_session.scalar(
+            select(func.count())
+            .select_from(NetworkEvent)
+            .where(NetworkEvent.sensor_id == sensor_id)
+        )
+        or 0
+    )
+
+
 def _build_site(db_session, *, slug_prefix: str):
-    msp = th.create_msp(db_session, name=f"MSP {slug_prefix}", slug=f"msp-{slug_prefix}")
+    unique = uuid.uuid4().hex[:8]
+    slug_root = f"{slug_prefix}-{unique}"
+    msp = th.create_msp(db_session, name=f"MSP {slug_root}", slug=f"msp-{slug_root}")
     customer = th.create_customer(
         db_session,
         msp_id=msp.id,
         name="Customer",
-        slug=f"cust-{slug_prefix}",
+        slug=f"cust-{slug_root}",
     )
     site = th.create_site(
         db_session,
         msp_id=msp.id,
         customer_id=customer.id,
         name="Site",
-        slug=f"site-{slug_prefix}",
+        slug=f"site-{slug_root}",
     )
     sensor = th.create_sensor(
         db_session,
         msp_id=msp.id,
         site_id=site.id,
         name="Sensor",
-        slug=f"sensor-{slug_prefix}",
+        slug=f"sensor-{slug_root}",
     )
     return msp, site, sensor
 
 
 def test_import_counts_and_reimport_is_idempotent(db_session):
     msp, _site, sensor = _build_site(db_session, slug_prefix="import-a")
+    assert _event_count_for_sensor(db_session, sensor.id) == 0
 
     first = import_zeek_conn_file(
         db_session,
@@ -55,6 +69,7 @@ def test_import_counts_and_reimport_is_idempotent(db_session):
     assert first.inserted == 3
     assert first.duplicates == 0
     assert first.rejected_count == 0
+    assert _event_count_for_sensor(db_session, sensor.id) == 3
 
     second = import_zeek_conn_file(
         db_session,
@@ -65,9 +80,7 @@ def test_import_counts_and_reimport_is_idempotent(db_session):
     assert second.inserted == 0
     assert second.duplicates == 3
     assert second.rejected_count == 0
-
-    total = db_session.scalar(select(func.count()).select_from(NetworkEvent))
-    assert total == 3
+    assert _event_count_for_sensor(db_session, sensor.id) == 3
 
 
 def test_same_fixture_different_sensors_inserts_independently(db_session):
@@ -77,8 +90,10 @@ def test_same_fixture_different_sensors_inserts_independently(db_session):
         msp_id=msp.id,
         site_id=site.id,
         name="Sensor B",
-        slug="sensor-b-import",
+        slug=f"sensor-b-{uuid.uuid4().hex[:8]}",
     )
+    assert _event_count_for_sensor(db_session, sensor_a.id) == 0
+    assert _event_count_for_sensor(db_session, sensor_b.id) == 0
 
     result_a = import_zeek_conn_file(
         db_session,
@@ -95,13 +110,17 @@ def test_same_fixture_different_sensors_inserts_independently(db_session):
 
     assert result_a.inserted == 3
     assert result_b.inserted == 3
-    total = db_session.scalar(select(func.count()).select_from(NetworkEvent))
-    assert total == 6
+    assert _event_count_for_sensor(db_session, sensor_a.id) == 3
+    assert _event_count_for_sensor(db_session, sensor_b.id) == 3
 
 
 def test_unknown_sensor_and_wrong_msp_rejected(db_session):
     msp, _site, sensor = _build_site(db_session, slug_prefix="import-c")
-    other_msp = th.create_msp(db_session, name="Other", slug="msp-import-c-other")
+    other_msp = th.create_msp(
+        db_session,
+        name="Other",
+        slug=f"msp-import-c-other-{uuid.uuid4().hex[:8]}",
+    )
 
     with pytest.raises(ImportValidationError):
         resolve_sensor_for_import(
@@ -124,14 +143,14 @@ def test_db_rejects_cross_site_sensor_relationship(db_session):
         db_session,
         msp_id=msp.id,
         name="Customer D2",
-        slug="cust-d2",
+        slug=f"cust-d2-{uuid.uuid4().hex[:8]}",
     )
     site_b = th.create_site(
         db_session,
         msp_id=msp.id,
         customer_id=customer.id,
         name="Site B",
-        slug="site-d-b",
+        slug=f"site-d-b-{uuid.uuid4().hex[:8]}",
     )
 
     event = NetworkEvent(
@@ -156,6 +175,8 @@ def test_db_rejects_cross_site_sensor_relationship(db_session):
 
 def test_import_reports_rejected_lines_without_commit(db_session, tmp_path):
     msp, _site, sensor = _build_site(db_session, slug_prefix="import-e")
+    assert _event_count_for_sensor(db_session, sensor.id) == 0
+
     bad_file = tmp_path / "bad.jsonl"
     bad_file.write_text(
         '{"ts": 1.0, "uid": "OK1", "id": {"orig_h": "192.0.2.1", "resp_h": "198.51.100.1"}, "proto": "tcp"}\n'
@@ -172,6 +193,8 @@ def test_import_reports_rejected_lines_without_commit(db_session, tmp_path):
     assert result.inserted == 1
     assert result.rejected_count == 1
     assert result.rejected[0].line_number == 2
+    assert _event_count_for_sensor(db_session, sensor.id) == 1
+
     db_session.rollback()
-    count = db_session.scalar(select(func.count()).select_from(NetworkEvent))
-    assert count == 0
+    db_session.expire_all()
+    assert _event_count_for_sensor(db_session, sensor.id) == 0
