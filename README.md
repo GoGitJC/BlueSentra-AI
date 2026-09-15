@@ -25,7 +25,8 @@ BlueSentra passively analyzes network telemetry to identify suspicious behaviora
 | Database relationship / tenant ownership constraints | **Implemented** (composite FKs + `msp_id` scoping helpers) |
 | Authenticated MSP access isolation (login, tokens, authorization) | **Planned** |
 | REST CRUD for tenants / events / alerts | **Planned** |
-| Zeek / Suricata ingestion, BS-001–BS-005 detections | **Planned** |
+| Zeek `conn.log` JSONL import (CLI → PostgreSQL) | **Implemented** (Phase 5A; offline import) |
+| HTTP event ingestion, Suricata, BS-001–BS-005 detections | **Planned** |
 
 ---
 
@@ -76,6 +77,23 @@ Alembic (from repo root, after DB is up):
 cd backend && alembic -c alembic.ini upgrade head
 python scripts/seed_demo_tenant.py
 ```
+
+### Import Zeek conn.log (JSON Lines)
+
+Requires a seeded demo sensor (or any valid `--msp-id` / `--sensor-id` from your tenant).
+
+```bash
+python scripts/import_zeek_conn.py \
+  --msp-id <msp-uuid> \
+  --sensor-id <sensor-uuid> \
+  --file fixtures/zeek/conn_sample.jsonl
+```
+
+- **Format:** Zeek `conn.log` as JSON Lines (one JSON object per line). See [Zeek Conn::Info](https://docs.zeek.org/en/current/scripts/base/protocols/conn/main.zeek.html).
+- **Deduplication:** Unique on `(sensor_id, source_type, source_event_id)` using Zeek `uid`. Re-importing the same file for the same sensor counts duplicates and does not insert again. The same `uid` on a different sensor is stored separately.
+- **Tenant ownership:** `site_id` and `msp_id` are taken from the validated sensor row, never from the log file.
+- **Exit codes:** `0` success; `1` if any line is rejected (transaction rolled back); `2` validation/file errors.
+- **Limitations:** No HTTP ingestion API, no `device_id` assignment, no Suricata, no detections yet. Synthetic fixtures use documentation IP ranges (`192.0.2.0/24`, `198.51.100.0/24`).
 
 ---
 

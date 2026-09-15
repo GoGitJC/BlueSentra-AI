@@ -20,6 +20,7 @@ class Sensor(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "sensors"
     __table_args__ = (
         UniqueConstraint("site_id", "slug", name="uq_sensors_site_slug"),
+        UniqueConstraint("id", "site_id", "msp_id", name="uq_sensors_id_site_msp"),
         ForeignKeyConstraint(
             ["site_id", "msp_id"],
             ["sites.id", "sites.msp_id"],

@@ -19,6 +19,7 @@ class Device(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     __tablename__ = "devices"
     __table_args__ = (
         UniqueConstraint("site_id", "mac_address", name="uq_devices_site_mac"),
+        UniqueConstraint("id", "msp_id", "site_id", name="uq_devices_id_msp_site"),
         ForeignKeyConstraint(
             ["site_id", "msp_id"],
             ["sites.id", "sites.msp_id"],

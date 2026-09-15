@@ -11,3 +11,9 @@ class SensorStatus(str, enum.Enum):
     PENDING = "pending"
     ACTIVE = "active"
     OFFLINE = "offline"
+
+
+class NetworkEventSourceType(str, enum.Enum):
+    """Normalized telemetry source identifiers."""
+
+    ZEEK_CONN = "zeek_conn"
